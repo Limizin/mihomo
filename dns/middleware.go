@@ -147,51 +147,15 @@ func withMapping(mapping *lru.LruCache[netip.Addr, string]) middleware {
 }
 
 func withFakeIP(skipper *fakeip.Skipper, fakePool *fakeip.Pool, fakePool6 *fakeip.Pool, fakeIPTTL int) middleware {
+	_, _, _ = fakePool, fakePool6, fakeIPTTL // PBR mode: fake-ip pool synthesis disabled, kept in signature for callers
 	return func(next handler) handler {
 		return func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error) {
-			q := r.Question[0]
-
-			host := strings.TrimRight(q.Name, ".")
-			if skipper.ShouldSkipped(host) {
-				return next(ctx, r)
-			}
-
-			var rr D.RR
-			switch q.Qtype {
-			case D.TypeA:
-				if fakePool == nil {
-					return handleMsgWithEmptyAnswer(r), nil
-				}
-				ip := fakePool.Lookup(host)
-				rr = &D.A{
-					Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: dnsDefaultTTL},
-					A:   ip.AsSlice(),
-				}
-			case D.TypeAAAA:
-				if fakePool6 == nil {
-					return handleMsgWithEmptyAnswer(r), nil
-				}
-				ip := fakePool6.Lookup(host)
-				rr = &D.AAAA{
-					Hdr:  D.RR_Header{Name: q.Name, Rrtype: D.TypeAAAA, Class: D.ClassINET, Ttl: dnsDefaultTTL},
-					AAAA: ip.AsSlice(),
-				}
-			case D.TypeSVCB, D.TypeHTTPS:
-				return handleMsgWithEmptyAnswer(r), nil
-			default:
-				return next(ctx, r)
-			}
-
-			msg := r.Copy()
-			msg.Answer = []D.RR{rr}
-
-			ctx.SetType(icontext.DNSTypeFakeIP)
-			setMsgTTL(msg, uint32(fakeIPTTL))
-			msg.SetRcode(r, D.RcodeSuccess)
-			msg.Authoritative = true
-			msg.RecursionAvailable = true
-
-			return msg, nil
+			host := strings.TrimRight(r.Question[0].Name, ".")
+			// Domains that previously would have received a fake-ip are flagged for
+			// nft-set insertion; everything else (skipper matched -> real-ip path)
+			// is passed through unchanged.
+			ctx.SetNftAdd(!skipper.ShouldSkipped(host))
+			return next(ctx, r)
 		}
 	}
 }

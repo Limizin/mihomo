@@ -9,9 +9,11 @@ import (
 	"github.com/metacubex/mihomo/common/arc"
 	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/common/singleflight"
+	"github.com/metacubex/mihomo/component/nftset"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
+	icontext "github.com/metacubex/mihomo/context"
 	"github.com/metacubex/mihomo/log"
 
 	D "github.com/miekg/dns"
@@ -186,6 +188,13 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	q := m.Question[0]
 
+	// Capture the PBR-flag from the caller's DNSContext before singleflight
+	// replaces ctx with a fresh context.Background() (see fn below).
+	var nftAdd bool
+	if dnsCtx, ok := ctx.(*icontext.DNSContext); ok {
+		nftAdd = dnsCtx.NftAdd()
+	}
+
 	retryNum := 0
 	retryMax := 3
 	fn := func() (result *D.Msg, err error) {
@@ -203,6 +212,9 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 
 			if cache {
 				putMsgToCache(r.cache, q, result)
+				if nftAdd {
+					nftset.Submit(result)
+				}
 			}
 		}()
 

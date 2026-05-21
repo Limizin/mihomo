@@ -156,12 +156,20 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 		return nil, errors.New("should have one question at least")
 	}
 	continueFetch := false
+	// Preserve the PBR nft-add flag from the caller's DNSContext so the
+	// background stale-refresh path also pins resolved IPs into the set.
+	var nftAdd bool
+	if dnsCtx, ok := ctx.(*icontext.DNSContext); ok {
+		nftAdd = dnsCtx.NftAdd()
+	}
 	defer func() {
 		if continueFetch || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
+				bgCtx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
 				defer cancel()
-				_, _ = r.exchangeWithoutCache(ctx, m) // ignore result, just for putMsgToCache
+				dnsCtx := icontext.NewDNSContext(bgCtx)
+				dnsCtx.SetNftAdd(nftAdd)
+				_, _ = r.exchangeWithoutCache(dnsCtx, m) // ignore result, just for putMsgToCache
 			}()
 		}
 	}()

@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/nftables"
@@ -29,8 +28,6 @@ const (
 	setName6  = "pbr6"
 
 	channelSize = 1024
-	dedupSize   = 10000
-	dedupAge    = 5 * 60 // seconds
 
 	batchSize    = 128
 	batchTimeout = 100 * time.Millisecond
@@ -83,11 +80,6 @@ func Submit(msg *D.Msg) {
 }
 
 func worker() {
-	dedup := lru.New(
-		lru.WithSize[netip.Addr, struct{}](dedupSize),
-		lru.WithAge[netip.Addr, struct{}](dedupAge),
-	)
-
 	conn := &nftables.Conn{}
 	table := &nftables.Table{Name: tableName, Family: nftables.TableFamilyINet}
 	set4 := &nftables.Set{Table: table, Name: setName4}
@@ -99,32 +91,43 @@ func worker() {
 	timer.Stop()
 	timerActive := false
 
+	// refresh adds, deletes, then re-adds each element in a single netlink
+	// transaction. nftables cannot replace a set element's timeout in place
+	// (no NLM_F_REPLACE for set elems), and deleting a non-existent element
+	// fails with ENOENT. The leading add guarantees the element exists so the
+	// delete always succeeds, and the trailing add re-creates it with a fresh
+	// timeout — all atomic, so the IP is never absent from the set mid-flush.
+	refresh := func(set *nftables.Set, pending []nftables.SetElement) {
+		if len(pending) == 0 {
+			return
+		}
+		if err := conn.SetAddElements(set, pending); err != nil {
+			log.Warnln("[nftset] add(pre) inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return
+		}
+		if err := conn.SetDeleteElements(set, pending); err != nil {
+			log.Warnln("[nftset] delete inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return
+		}
+		if err := conn.SetAddElements(set, pending); err != nil {
+			log.Warnln("[nftset] add inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return
+		}
+	}
+
 	flush := func() {
-		if len(pending4) > 0 {
-			if err := conn.SetAddElements(set4, pending4); err != nil {
-				log.Warnln("[nftset] SetAddElements %s/%s/%s: %s", "inet", tableName, setName4, err.Error())
-			}
-			pending4 = pending4[:0]
-		}
-		if len(pending6) > 0 {
-			if err := conn.SetAddElements(set6, pending6); err != nil {
-				log.Warnln("[nftset] SetAddElements %s/%s/%s: %s", "inet", tableName, setName6, err.Error())
-			}
-			pending6 = pending6[:0]
-		}
+		refresh(set4, pending4)
+		refresh(set6, pending6)
+		pending4 = pending4[:0]
+		pending6 = pending6[:0]
 		if err := conn.Flush(); err != nil {
-			log.Warnln("[nftset] Flush: %s", err.Error())
+			log.Warnln("[nftset] flush: %s", err.Error())
 		}
 	}
 
 	for {
 		select {
 		case e := <-ch:
-			if _, ok := dedup.Get(e.ip); ok {
-				continue
-			}
-			dedup.Set(e.ip, struct{}{})
-
 			if e.ip.Is4() {
 				pending4 = append(pending4, nftables.SetElement{Key: e.ip.AsSlice()})
 			} else {

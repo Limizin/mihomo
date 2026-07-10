@@ -219,6 +219,18 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 			}
 
 			if cache {
+				// Clamp TTL well below the nftset element timeout (24h, see
+				// component/nftset) so a client with a long-lived upstream TTL still
+				// re-resolves before its nftset entry expires, keeping the PBR route
+				// alive. 2h margin below 24h: the LRU cache's expiry is a plain Unix
+				// timestamp compared against wall-clock time.Now() (not monotonic) —
+				// a backward clock adjustment can otherwise extend the cache's
+				// effective lifetime. Checked over Answer+Ns+Extra to match exactly
+				// how putMsgToCache below computes the cache TTL.
+				const maxCacheTTL uint32 = 22 * 60 * 60
+				if t := minimalTTL(lo.Concat(result.Answer, result.Ns, result.Extra)); t > maxCacheTTL {
+					setMsgTTL(result, maxCacheTTL)
+				}
 				putMsgToCache(r.cache, q, result)
 				if nftAdd {
 					nftset.Submit(result)

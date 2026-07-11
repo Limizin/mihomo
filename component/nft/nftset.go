@@ -1,5 +1,5 @@
-// Package nftset adds resolved IPs to a pair of pre-existing nftables sets so
-// that downstream PBR (policy-based routing) rules can use them.
+// This file (nftset.go) adds resolved IPs to a pair of pre-existing nftables
+// sets so that downstream PBR (policy-based routing) rules can use them.
 //
 // The sets must be created externally (e.g. by OpenWrt init scripts):
 //
@@ -8,14 +8,16 @@
 //	nft 'add set inet clash pbr6 { type ipv6_addr; flags timeout, dynamic; timeout 24h; }'
 //
 // Submit is a non-blocking, fire-and-forget hook called from the DNS resolver
-// when a request is flagged for PBR routing.
-package nftset
+// when a request is flagged for PBR routing. See nftcidrset.go for the
+// companion rule-provider-CIDR mirror in this same package.
+package nft
 
 import (
 	"net/netip"
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/nftables"
@@ -51,7 +53,9 @@ func ensureStarted() {
 
 // Submit extracts global-unicast A/AAAA records from msg and asynchronously
 // adds them to the corresponding nftables set. Drops silently if the worker
-// channel is full.
+// channel is full. AAAA records are dropped entirely when IPv6 is globally
+// disabled — the kernel won't pass v6 traffic to mihomo anyway, so there's
+// no point tracking resolved v6 addresses.
 func Submit(msg *D.Msg) {
 	if msg == nil {
 		return
@@ -63,6 +67,9 @@ func Submit(msg *D.Msg) {
 		case *D.A:
 			ip, _ = netip.AddrFromSlice(a.A)
 		case *D.AAAA:
+			if resolver.DisableIPv6 {
+				continue
+			}
 			ip, _ = netip.AddrFromSlice(a.AAAA)
 		default:
 			continue

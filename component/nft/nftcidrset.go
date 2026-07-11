@@ -1,7 +1,8 @@
-// Package nftcidrset mirrors the CIDR ranges of every "ipcidr" behavior
-// rule-provider (subscriptions/files) into a pair of pre-existing nftables
-// sets so that downstream PBR (policy-based routing) rules can match on
-// them, in addition to the DNS-resolved IPs handled by component/nftset.
+// This file (nftcidrset.go) mirrors the CIDR ranges of every "ipcidr"
+// behavior rule-provider (subscriptions/files) into a pair of pre-existing
+// nftables sets so that downstream PBR (policy-based routing) rules can
+// match on them, in addition to the DNS-resolved IPs handled by nftset.go
+// in this same package.
 //
 // The sets must be created externally (e.g. by OpenWrt init scripts):
 //
@@ -9,11 +10,11 @@
 //	nft 'add set inet clash pbrcidr4 { type ipv4_addr; flags interval; }'
 //	nft 'add set inet clash pbrcidr6 { type ipv6_addr; flags interval; }'
 //
-// Unlike component/nftset (which adds individually resolved IPs one at a
-// time), this package always does a full atomic drop+refill of both sets:
-// rule-provider content isn't additive across reloads, so the only correct
+// Unlike nftset.go (which adds individually resolved IPs one at a time),
+// this file always does a full atomic drop+refill of both sets: rule
+// -provider content isn't additive across reloads, so the only correct
 // mirror is "replace with exactly what the providers currently contain".
-package nftcidrset
+package nft
 
 import (
 	"context"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/cidr"
+	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
@@ -32,11 +34,10 @@ import (
 )
 
 const (
-	tableName = "clash"
-	setName4  = "pbrcidr4"
-	setName6  = "pbrcidr6"
+	cidrSetName4 = "pbrcidr4"
+	cidrSetName6 = "pbrcidr6"
 
-	batchSize = 512
+	cidrBatchSize = 512
 )
 
 // cidrProvider is optionally implemented by the Strategy() value of a
@@ -106,10 +107,13 @@ func run(ctx context.Context) {
 	// add ignores individual errors: a bad prefix was already validated by
 	// its source (rule-provider parsing), so a failure here would only be a
 	// mismatched address family, which can't happen given the Is4() split.
+	// v6 prefixes are dropped entirely when IPv6 is globally disabled
+	// (general "ipv6" config, not dns.ipv6): the kernel won't pass v6
+	// traffic to mihomo at all, so pbrcidr6 must stay empty to match.
 	add := func(prefix netip.Prefix) {
 		if prefix.Addr().Is4() {
 			_ = set4.AddIpCidr(prefix)
-		} else {
+		} else if !resolver.DisableIPv6 {
 			_ = set6.AddIpCidr(prefix)
 		}
 	}
@@ -228,17 +232,23 @@ func hashPrefixes(v4, v6 []netip.Prefix) utils.HashType {
 func replace(v4, v6 []netip.Prefix) error {
 	conn := &nftables.Conn{}
 	table := &nftables.Table{Name: tableName, Family: nftables.TableFamilyINet}
-	set4 := &nftables.Set{Table: table, Name: setName4, Interval: true}
-	set6 := &nftables.Set{Table: table, Name: setName6, Interval: true}
+	set4 := &nftables.Set{Table: table, Name: cidrSetName4, Interval: true}
 
 	conn.FlushSet(set4)
-	conn.FlushSet(set6)
-
 	for _, batch := range batchElements(v4) {
 		conn.SetAddElements(set4, batch)
 	}
-	for _, batch := range batchElements(v6) {
-		conn.SetAddElements(set6, batch)
+
+	// Skip pbrcidr6 entirely when IPv6 is globally disabled (general "ipv6"
+	// config, not dns.ipv6): v6 is never populated in this case (see add()
+	// in run()), and touching a set that an external init script may not
+	// have created for this mode risks aborting the whole transaction.
+	if !resolver.DisableIPv6 {
+		set6 := &nftables.Set{Table: table, Name: cidrSetName6, Interval: true}
+		conn.FlushSet(set6)
+		for _, batch := range batchElements(v6) {
+			conn.SetAddElements(set6, batch)
+		}
 	}
 
 	return conn.Flush()
@@ -248,9 +258,9 @@ func batchElements(prefixes []netip.Prefix) [][]nftables.SetElement {
 	if len(prefixes) == 0 {
 		return nil
 	}
-	batches := make([][]nftables.SetElement, 0, (len(prefixes)+batchSize-1)/batchSize)
-	for start := 0; start < len(prefixes); start += batchSize {
-		end := start + batchSize
+	batches := make([][]nftables.SetElement, 0, (len(prefixes)+cidrBatchSize-1)/cidrBatchSize)
+	for start := 0; start < len(prefixes); start += cidrBatchSize {
+		end := start + cidrBatchSize
 		if end > len(prefixes) {
 			end = len(prefixes)
 		}

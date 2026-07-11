@@ -60,7 +60,7 @@ func (c *classicalStrategy) payloadToRule(rule string) (C.Rule, error) {
 func (c *classicalStrategy) FinishInsert() {}
 
 // Rules exposes the parsed rules so callers outside this package (e.g.
-// component/nftcidrset) can pick out the ones they care about (e.g.
+// component/nft) can pick out the ones they care about (e.g.
 // IP-CIDR) via a structurally-matched interface, without this package
 // needing to export classicalStrategy itself.
 func (c *classicalStrategy) Rules() []C.Rule {

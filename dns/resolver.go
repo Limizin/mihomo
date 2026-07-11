@@ -9,7 +9,7 @@ import (
 	"github.com/metacubex/mihomo/common/arc"
 	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/common/singleflight"
-	"github.com/metacubex/mihomo/component/nftset"
+	"github.com/metacubex/mihomo/component/nft"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
@@ -220,7 +220,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 
 			if cache {
 				// Clamp TTL well below the nftset element timeout (24h, see
-				// component/nftset) so a client with a long-lived upstream TTL still
+				// component/nft) so a client with a long-lived upstream TTL still
 				// re-resolves before its nftset entry expires, keeping the PBR route
 				// alive. 2h margin below 24h: the LRU cache's expiry is a plain Unix
 				// timestamp compared against wall-clock time.Now() (not monotonic) —
@@ -233,7 +233,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 				}
 				putMsgToCache(r.cache, q, result)
 				if nftAdd {
-					nftset.Submit(result)
+					nft.Submit(result)
 				}
 			}
 		}()

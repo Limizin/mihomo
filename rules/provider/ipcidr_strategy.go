@@ -85,7 +85,7 @@ func (i *ipcidrStrategy) ToIpCidr() *netipx.IPSet {
 }
 
 // Foreach exposes the raw prefixes so callers outside this package (e.g.
-// component/nftcidrset) can walk them via a structurally-matched interface,
+// component/nft) can walk them via a structurally-matched interface,
 // without this package needing to export ipcidrStrategy itself.
 func (i *ipcidrStrategy) Foreach(f func(prefix netip.Prefix) bool) {
 	if i.cidrSet != nil {

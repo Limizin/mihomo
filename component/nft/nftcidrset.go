@@ -164,11 +164,11 @@ func run(ctx context.Context) {
 	// two independent rule-providers/subscriptions have no reason to be
 	// mutually disjoint.
 	if err := set4.Merge(); err != nil {
-		log.Warnln("[nftcidrset] merge v4: %s", err.Error())
+		log.Errorln("[nftcidrset] merge v4: %s", err.Error())
 		return
 	}
 	if err := set6.Merge(); err != nil {
-		log.Warnln("[nftcidrset] merge v6: %s", err.Error())
+		log.Errorln("[nftcidrset] merge v6: %s", err.Error())
 		return
 	}
 
@@ -199,7 +199,7 @@ func run(ctx context.Context) {
 	}
 
 	if err := replace(v4, v6); err != nil {
-		log.Warnln("[nftcidrset] replace: %s", err.Error())
+		log.Errorln("[nftcidrset] replace: %s", err.Error())
 		return
 	}
 	log.Infoln("[nftcidrset] replaced pbrcidr4/pbrcidr6: v4=%d v6=%d hash=%s", len(v4), len(v6), hash.String())

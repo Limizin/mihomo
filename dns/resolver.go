@@ -231,10 +231,21 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 				if t := minimalTTL(lo.Concat(result.Answer, result.Ns, result.Extra)); t > maxCacheTTL {
 					setMsgTTL(result, maxCacheTTL)
 				}
-				putMsgToCache(r.cache, q, result)
+
+				// For PBR-listed domains, a successful nftset write is a
+				// precondition for treating this answer as done: caching
+				// before a failed Submit would let the next lookup hit the
+				// cache and never retry the nftables write, making the miss
+				// permanent and silent. Skipping the cache write here means
+				// the next lookup re-enters exchangeWithoutCache and retries.
 				if nftAdd {
-					nft.Submit(result)
+					if e := nft.Submit(result); e != nil {
+						log.Errorln("[DNS] %s: nftset submit failed, returning SERVFAIL", q.String())
+						err = e
+						return
+					}
 				}
+				putMsgToCache(r.cache, q, result)
 			}
 		}()
 

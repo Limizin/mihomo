@@ -15,6 +15,7 @@
 package nft
 
 import (
+	"fmt"
 	"net/netip"
 	"sync"
 
@@ -44,9 +45,14 @@ var submitMu sync.Mutex
 // dropped entirely when IPv6 is globally disabled — the kernel won't pass
 // v6 traffic to mihomo anyway, so there's no point tracking resolved v6
 // addresses.
-func Submit(msg *D.Msg) {
+//
+// Returns an error if the nftables transaction fails for either address
+// family. A partial failure (e.g. v4 succeeds, v6 fails) is still reported
+// as an error: the caller can only accept or reject the whole DNS answer,
+// and the resulting set state is not fully known either way.
+func Submit(msg *D.Msg) error {
 	if msg == nil {
-		return
+		return nil
 	}
 
 	var pending4, pending6 []nftables.SetElement
@@ -74,7 +80,7 @@ func Submit(msg *D.Msg) {
 		}
 	}
 	if len(pending4) == 0 && len(pending6) == 0 {
-		return
+		return nil
 	}
 
 	table := &nftables.Table{Name: tableName, Family: nftables.TableFamilyINet}
@@ -87,31 +93,40 @@ func Submit(msg *D.Msg) {
 	// fails with ENOENT. The leading add guarantees the element exists so the
 	// delete always succeeds, and the trailing add re-creates it with a fresh
 	// timeout — all atomic, so the IP is never absent from the set mid-flush.
-	refresh := func(conn *nftables.Conn, set *nftables.Set, pending []nftables.SetElement) {
+	refresh := func(conn *nftables.Conn, set *nftables.Set, pending []nftables.SetElement) error {
 		if len(pending) == 0 {
-			return
+			return nil
 		}
 		if err := conn.SetAddElements(set, pending); err != nil {
-			log.Warnln("[nftset] add(pre) inet/%s/%s: %s", tableName, set.Name, err.Error())
-			return
+			log.Errorln("[nftset] add(pre) inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return fmt.Errorf("add(pre) inet/%s/%s: %w", tableName, set.Name, err)
 		}
 		if err := conn.SetDeleteElements(set, pending); err != nil {
-			log.Warnln("[nftset] delete inet/%s/%s: %s", tableName, set.Name, err.Error())
-			return
+			log.Errorln("[nftset] delete inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return fmt.Errorf("delete inet/%s/%s: %w", tableName, set.Name, err)
 		}
 		if err := conn.SetAddElements(set, pending); err != nil {
-			log.Warnln("[nftset] add inet/%s/%s: %s", tableName, set.Name, err.Error())
-			return
+			log.Errorln("[nftset] add inet/%s/%s: %s", tableName, set.Name, err.Error())
+			return fmt.Errorf("add inet/%s/%s: %w", tableName, set.Name, err)
 		}
+		return nil
 	}
 
 	submitMu.Lock()
 	defer submitMu.Unlock()
 
 	conn := &nftables.Conn{}
-	refresh(conn, set4, pending4)
-	refresh(conn, set6, pending6)
+	// A failure on either family is reported as a whole: the resulting set
+	// state (which elements actually landed) is not fully known either way,
+	// so there is no meaningful "partial success" to report to the caller.
+	err4 := refresh(conn, set4, pending4)
+	err6 := refresh(conn, set6, pending6)
 	if err := conn.Flush(); err != nil {
-		log.Warnln("[nftset] flush: %s", err.Error())
+		log.Errorln("[nftset] flush: %s", err.Error())
+		return fmt.Errorf("flush: %w", err)
 	}
+	if err4 != nil {
+		return err4
+	}
+	return err6
 }

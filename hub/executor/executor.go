@@ -21,6 +21,7 @@ import (
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/iface"
 	"github.com/metacubex/mihomo/component/keepalive"
+	"github.com/metacubex/mihomo/component/nftcidrset"
 	"github.com/metacubex/mihomo/component/profile"
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -115,6 +116,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	loadProvider(cfg.Providers)
 	updateProfile(cfg)
 	loadProvider(cfg.RuleProviders)
+	nftcidrset.Update()
 	runtime.GC()
 	tunnel.OnRunning()
 	updateUpdater(cfg)

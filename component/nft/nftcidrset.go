@@ -72,15 +72,19 @@ var (
 	mu     sync.Mutex
 	cancel context.CancelFunc
 
-	lastHash [md5.Size]byte
-
 	subscribeOnce sync.Once
 
 	// writeMu serializes replace() calls: nftables Flush() transactions from
 	// two concurrent runs can interleave in the kernel (one's FlushSet racing
 	// the other's SetAddElements), which manifests as "file exists" errors
 	// and a set left empty. Only one replace() may be in flight at a time.
+	// It also guards lastHash: the changed-check and the lastHash update
+	// that follows a successful replace() must be one atomic section, or
+	// two runs computing the same new hash could both see the old lastHash
+	// and both decide to write.
 	writeMu sync.Mutex
+
+	lastHash [md5.Size]byte
 )
 
 // Update triggers an asynchronous re-scan of every ipcidr rule-provider and,
@@ -203,14 +207,6 @@ func run(ctx context.Context) {
 
 	hash := hashPrefixes(v4, v6)
 
-	mu.Lock()
-	changed := hash != lastHash
-	mu.Unlock()
-	if !changed {
-		log.Infoln("[nftcidrset] pbrcidr4/pbrcidr6 content doesn't change")
-		return
-	}
-
 	writeMu.Lock()
 	defer writeMu.Unlock()
 
@@ -220,15 +216,18 @@ func run(ctx context.Context) {
 		return
 	}
 
+	if hash == lastHash {
+		log.Infoln("[nftcidrset] pbrcidr4/pbrcidr6 content doesn't change")
+		return
+	}
+
 	if err := replace(v4, v6); err != nil {
 		log.Errorln("[nftcidrset] replace: %s", err.Error())
 		return
 	}
 	log.Infoln("[nftcidrset] replaced pbrcidr4/pbrcidr6: v4=%d v6=%d", len(v4), len(v6))
 
-	mu.Lock()
 	lastHash = hash
-	mu.Unlock()
 }
 
 func sortPrefixes(prefixes []netip.Prefix) {

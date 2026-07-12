@@ -18,11 +18,11 @@ package nft
 
 import (
 	"context"
+	"crypto/md5"
 	"net/netip"
 	"sort"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
@@ -62,7 +62,7 @@ var (
 	mu     sync.Mutex
 	cancel context.CancelFunc
 
-	lastHash utils.HashType
+	lastHash [md5.Size]byte
 
 	subscribeOnce sync.Once
 
@@ -182,7 +182,7 @@ func run(ctx context.Context) {
 	hash := hashPrefixes(v4, v6)
 
 	mu.Lock()
-	changed := !hash.Equal(lastHash)
+	changed := hash != lastHash
 	mu.Unlock()
 	if !changed {
 		log.Infoln("[nftcidrset] pbrcidr4/pbrcidr6 content doesn't change")
@@ -202,7 +202,7 @@ func run(ctx context.Context) {
 		log.Errorln("[nftcidrset] replace: %s", err.Error())
 		return
 	}
-	log.Infoln("[nftcidrset] replaced pbrcidr4/pbrcidr6: v4=%d v6=%d hash=%s", len(v4), len(v6), hash.String())
+	log.Infoln("[nftcidrset] replaced pbrcidr4/pbrcidr6: v4=%d v6=%d", len(v4), len(v6))
 
 	mu.Lock()
 	lastHash = hash
@@ -215,18 +215,27 @@ func sortPrefixes(prefixes []netip.Prefix) {
 	})
 }
 
-func hashPrefixes(v4, v6 []netip.Prefix) utils.HashType {
-	buf := make([]byte, 0, (len(v4)+len(v6))*20)
+// hashPrefixes streams each prefix's raw address bytes and bit length
+// straight into an md5 hasher, rather than building one big concatenated
+// []byte first — the CIDR set can span hundreds of subscriptions, and
+// materializing the whole serialization just to hash it once would mean
+// repeatedly growing and copying an ever-larger buffer. A one-byte length
+// prefix disambiguates consecutive entries (v4 is always 4 bytes, v6
+// always 16, so entries can never be confused with each other).
+func hashPrefixes(v4, v6 []netip.Prefix) [md5.Size]byte {
+	h := md5.New()
+	var lenByte [1]byte
 	for _, p := range v4 {
-		buf = append(buf, p.String()...)
-		buf = append(buf, '\n')
+		h.Write(p.Addr().AsSlice())
+		lenByte[0] = byte(p.Bits())
+		h.Write(lenByte[:])
 	}
-	buf = append(buf, '|')
 	for _, p := range v6 {
-		buf = append(buf, p.String()...)
-		buf = append(buf, '\n')
+		h.Write(p.Addr().AsSlice())
+		lenByte[0] = byte(p.Bits())
+		h.Write(lenByte[:])
 	}
-	return utils.MakeHash(buf)
+	return [md5.Size]byte(h.Sum(nil))
 }
 
 func replace(v4, v6 []netip.Prefix) error {

@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -38,6 +39,15 @@ const (
 	cidrSetName6 = "pbrcidr6"
 
 	cidrBatchSize = 512
+
+	// updateDebounce delays the actual provider scan after Update() is
+	// called: a config (re)load fires one RuleUpdateCallback per
+	// subscription as each one's cache load completes, so a cascade of ~100
+	// calls in a tight burst is the common case, not the exception. Without
+	// a debounce, every one of those calls would start its own goroutine
+	// that scans all providers and hashes the result before almost
+	// certainly being cancelled by the next call a moment later.
+	updateDebounce = 1000 * time.Millisecond
 )
 
 // cidrProvider is optionally implemented by the Strategy() value of a
@@ -77,6 +87,9 @@ var (
 // if the resulting CIDR set actually changed, an atomic drop+refill of the
 // nftables sets. Safe to call concurrently and repeatedly: an in-flight run
 // is cancelled and replaced by a fresh one rather than allowed to race it.
+// The scan itself only starts after updateDebounce passes with no further
+// Update() call, so a burst of calls (e.g. one per subscription during a
+// config reload) only triggers a single scan.
 //
 // The first call also subscribes to tunnel.RuleUpdateCallback, so that any
 // later rule-provider load/reload (including a brand new subscription's
@@ -101,6 +114,15 @@ func Update() {
 }
 
 func run(ctx context.Context) {
+	// Debounce: wait out updateDebounce first, cancellable by the next
+	// Update() call. Only the last call in a burst survives to actually
+	// scan providers and hash the result.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(updateDebounce):
+	}
+
 	set4 := cidr.NewIpCidrSet()
 	set6 := cidr.NewIpCidrSet()
 

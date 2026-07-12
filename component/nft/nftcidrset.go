@@ -4,7 +4,8 @@
 // match on them, in addition to the DNS-resolved IPs handled by nftset.go
 // in this same package.
 //
-// The sets must be created externally (e.g. by OpenWrt init scripts):
+// The sets must be created externally (e.g. by OpenWrt init scripts), in the
+// same table as nftset.go's sets (NFT_MAIN_TABLE, default "clash"):
 //
 //	nft add table inet clash
 //	nft 'add set inet clash pbrcidr4 { type ipv4_addr; flags interval; }'
@@ -34,10 +35,16 @@ import (
 	"github.com/metacubex/nftables"
 )
 
-const (
-	cidrSetName4 = "pbrcidr4"
-	cidrSetName6 = "pbrcidr6"
+// cidrSetName4/cidrSetName6 default to "pbrcidr4"/"pbrcidr6" but can be
+// overridden via NFT_CIDR_SET/NFT_CIDR6_SET, mirroring nftset.go's
+// NFT_PBR_SET/NFT_PBR6_SET overrides for the same reason (multiple
+// side-by-side instances under different set names).
+var (
+	cidrSetName4 = getEnvOr("NFT_CIDR_SET", "pbrcidr4")
+	cidrSetName6 = getEnvOr("NFT_CIDR6_SET", "pbrcidr6")
+)
 
+const (
 	cidrBatchSize = 512
 
 	// updateDebounce delays the actual provider scan after Update() is

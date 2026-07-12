@@ -1,7 +1,9 @@
 // This file (nftset.go) adds resolved IPs to a pair of pre-existing nftables
 // sets so that downstream PBR (policy-based routing) rules can use them.
 //
-// The sets must be created externally (e.g. by OpenWrt init scripts):
+// The sets must be created externally (e.g. by OpenWrt init scripts), using
+// whatever names NFT_MAIN_TABLE/NFT_PBR_SET/NFT_PBR6_SET are set to (default
+// clash/pbr/pbr6):
 //
 //	nft add table inet clash
 //	nft 'add set inet clash pbr  { type ipv4_addr; flags timeout, dynamic; timeout 24h; }'
@@ -17,6 +19,7 @@ package nft
 import (
 	"fmt"
 	"net/netip"
+	"os"
 	"sync"
 
 	"github.com/metacubex/mihomo/component/resolver"
@@ -26,11 +29,22 @@ import (
 	D "github.com/miekg/dns"
 )
 
-const (
-	tableName = "clash"
-	setName4  = "pbr"
-	setName6  = "pbr6"
+// tableName/setName4/setName6 default to "clash"/"pbr"/"pbr6" but can be
+// overridden via NFT_MAIN_TABLE/NFT_PBR_SET/NFT_PBR6_SET, so an OpenWrt
+// init.d script can point mihomo at differently-named nftables objects
+// (e.g. to run several instances side by side) without a code change.
+var (
+	tableName = getEnvOr("NFT_MAIN_TABLE", "clash")
+	setName4  = getEnvOr("NFT_PBR_SET", "pbr")
+	setName6  = getEnvOr("NFT_PBR6_SET", "pbr6")
 )
+
+func getEnvOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // submitMu serializes nftables transactions issued by Submit: concurrent DNS
 // answers resolve on their own goroutines, and nftables.Conn transactions
